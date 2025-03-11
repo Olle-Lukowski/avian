@@ -6,7 +6,7 @@ use bevy::render::mesh::{Indices, VertexAttributeValues};
 use bevy::{log, prelude::*};
 use collision::contact_query::UnsupportedShape;
 use itertools::Either;
-use parry::shape::{RoundShape, SharedShape, TypedShape};
+use parry::shape::{RoundShape, SharedShape, TriMeshBuilderError, TypedShape};
 
 #[cfg(feature = "2d")]
 mod primitives2d;
@@ -842,9 +842,12 @@ impl Collider {
     ///
     /// The [`CollisionMargin`] component can be used to add thickness to the shape if needed.
     /// For thin shapes like triangle meshes, it can help improve collision stability and performance.
-    pub fn trimesh(vertices: Vec<Vector>, indices: Vec<[u32; 3]>) -> Self {
+    pub fn trimesh(
+        vertices: Vec<Vector>,
+        indices: Vec<[u32; 3]>,
+    ) -> Result<Self, TriMeshBuilderError> {
         let vertices = vertices.into_iter().map(|v| v.into()).collect();
-        SharedShape::trimesh(vertices, indices).into()
+        SharedShape::trimesh(vertices, indices).map(|s| s.into())
     }
 
     /// Creates a collider with a triangle mesh shape defined by its vertex and index buffers
@@ -858,9 +861,9 @@ impl Collider {
         vertices: Vec<Vector>,
         indices: Vec<[u32; 3]>,
         flags: TrimeshFlags,
-    ) -> Self {
+    ) -> Result<Self, TriMeshBuilderError> {
         let vertices = vertices.into_iter().map(|v| v.into()).collect();
-        SharedShape::trimesh_with_flags(vertices, indices, flags.into()).into()
+        SharedShape::trimesh_with_flags(vertices, indices, flags.into()).map(|s| s.into())
     }
 
     /// Creates a collider shape with a compound shape obtained from the decomposition of a given polyline
@@ -982,14 +985,17 @@ impl Collider {
     /// ```
     #[cfg(feature = "collider-from-mesh")]
     pub fn trimesh_from_mesh(mesh: &Mesh) -> Option<Self> {
-        extract_mesh_vertices_indices(mesh).map(|(vertices, indices)| {
-            SharedShape::trimesh_with_flags(
-                vertices,
-                indices,
-                TrimeshFlags::MERGE_DUPLICATE_VERTICES.into(),
-            )
-            .into()
-        })
+        extract_mesh_vertices_indices(mesh)
+            .map(|(vertices, indices)| {
+                SharedShape::trimesh_with_flags(
+                    vertices,
+                    indices,
+                    TrimeshFlags::MERGE_DUPLICATE_VERTICES.into(),
+                )
+                .map(|s| s.into())
+            })
+            .map(|r| r.ok())
+            .flatten()
     }
 
     /// Creates a collider with a triangle mesh shape from a `Mesh` using the given [`TrimeshFlags`]
@@ -1016,9 +1022,12 @@ impl Collider {
     /// ```
     #[cfg(feature = "collider-from-mesh")]
     pub fn trimesh_from_mesh_with_config(mesh: &Mesh, flags: TrimeshFlags) -> Option<Self> {
-        extract_mesh_vertices_indices(mesh).map(|(vertices, indices)| {
-            SharedShape::trimesh_with_flags(vertices, indices, flags.into()).into()
-        })
+        extract_mesh_vertices_indices(mesh)
+            .map(|(vertices, indices)| {
+                SharedShape::trimesh_with_flags(vertices, indices, flags.into()).map(|s| s.into())
+            })
+            .map(|r| r.ok())
+            .flatten()
     }
 
     /// Creates a collider with a convex polygon shape obtained from the convex hull of a `Mesh`.
@@ -1182,13 +1191,13 @@ impl Collider {
                 Some(Self::polyline(vertices, indices))
             }
             ColliderConstructor::Trimesh { vertices, indices } => {
-                Some(Self::trimesh(vertices, indices))
+                Self::trimesh(vertices, indices).ok()
             }
             ColliderConstructor::TrimeshWithConfig {
                 vertices,
                 indices,
                 flags,
-            } => Some(Self::trimesh_with_config(vertices, indices, flags)),
+            } => Self::trimesh_with_config(vertices, indices, flags).ok(),
             #[cfg(feature = "2d")]
             ColliderConstructor::ConvexDecomposition { vertices, indices } => {
                 Some(Self::convex_decomposition(vertices, indices))
